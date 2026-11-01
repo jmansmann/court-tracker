@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.local/
+architecture.html
+pnpm-lock.yaml
+docs/handoff.md
+docs/implementation-plan.md
+docs/execution.md
+AGENTS.md

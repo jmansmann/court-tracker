@@ -11,7 +11,7 @@ From this project directory:
 ```sh
 make install
 make browser
-make connect          # Only needed for initial connection or expired login
+COLLECTION_ENABLED=true make connect # Initial connection/expired login only; stored pause/cooldown still blocks it
 ```
 
 In the separate Chrome for Testing window, sign in normally and open the court schedule. Switch to the **Save McCarren session** tab and click **Save session**. Enter passwords and verification codes only in the provider's browser.
@@ -23,6 +23,16 @@ make up               # Build/start Docker in the background
 # Open http://127.0.0.1:4317
 make down             # Stop Docker; preserve sessions, settings, and schedule
 ```
+
+Provider collection is **paused by default** while McCarren's acceptable automated cadence is unconfirmed. The local dashboard still serves its cache. After McCarren/CourtReserve confirms an acceptable read cadence, enable collection explicitly when starting the runtime:
+
+```sh
+COLLECTION_ENABLED=true make up
+# or
+COLLECTION_ENABLED=true make dev
+```
+
+Enabling collection starts a provider check immediately. Do not enable it just to test connectivity or bypass a known cooldown.
 
 Or run natively:
 
@@ -37,17 +47,17 @@ With the service running, open **http://127.0.0.1:4317/architecture** for the in
 ## What the calendar shows
 
 - Rolling seven-day week view, focused day view, individual court choices, and external booking details.
-- Automatic collection of **all eight currently posted dates** (today plus seven days ahead), with every configured time row and all seven court columns verified. The eighth date is available when navigating forward.
+- When explicitly enabled, automatic collection checks **all eight currently posted dates** (today plus seven days ahead), with every configured time row and all seven court columns verified. The eighth date is available when navigating forward.
 - Explicit native **Reserve start choices**. The site does not establish supported reservation duration, price, or eligibility through the verified schedule reads, so these remain labeled unknown. Adjacent starts are never merged into an invented booking option.
 - A minimum-duration filter with an explicit choice to include starts whose duration is unknown. Unknown starts are not claimed to meet the selected duration. Uncheck that option to show only verified duration matches, which may currently be empty.
 - Date-specific checked timestamps, unknown coverage, errors, and stale cached data. A failed or partial refresh never clears a previously complete date or advances its success timestamp. Empty checked schedules are distinct from unknown or failed dates.
 - Saved view, duration, and court filters. The dashboard reads cached data; opening it does not scrape the provider.
 
-The collector normally checks the posted range **every 900 seconds (15 minutes) after the previous cycle completes**, independently of the dashboard tab. Closing the tab does not stop it; sleeping the computer or stopping the service does. Provider browsers close between scans to prevent idle page traffic. The local dashboard reads its cache every 15 seconds. Manual refresh coalesces with an active check and respects the same cadence/backoff.
+When enabled, the collector checks the posted range every `REFRESH_SECONDS` (default 900; minimum 900, maximum 3600) after the previous cycle completes, independently of the dashboard tab. Closing the tab does not stop it; sleeping the computer or stopping the service does. Provider browsers close between scans to prevent idle page traffic. The local dashboard reads its cache every 15 seconds. Manual refresh respects the same cooldown and is unavailable while local collection is paused.
 
-`REFRESH_SECONDS` may be set to an integer from 900 to 3600. The earlier two-minute setting was followed by a home-IP Cloudflare rate limit on October 31; the exact triggering request was not logged. Fifteen minutes is a reduced initial setting, not a provider-approved guarantee. Rate limiting honors the provider's `Retry-After` across reconnects and restarts; transient failures back off. Login-required or provider-blocked collection pauses until the saved session changes. Local session metadata is checked separately without bypassing a provider cooldown.
+The earlier two-minute setting and the subsequent 15-minute setting both preceded home-network Cloudflare 429s. Fifteen minutes is **not** a provider-approved safe limit. No exact request quota or approved cadence is known. The code applies `Retry-After` but caps it at 86,400 seconds (24 hours), so a stored 24-hour deadline does not prove the provider header was exactly 24 hours. Scheduled, manual, reconnect, and CLI provider requests remain blocked during the local pause or a persisted cooldown. Standalone provider commands also fail closed without local collection status unless `COLLECTION_ENABLED=true` is explicitly supplied; this does not override a saved pause or cooldown.
 
-**Current incident:** [2026-10-31 rate-limit findings](docs/incidents/2026-10-31-mccarren-rate-limit.md). The observed provider deadline is November 1 at approximately **1:15 a.m. EST**. Collection remains cooling down and the displayed cache remains stale until a successful verified read; a successful login alone does not establish recovery.
+**Current incident:** [McCarren rate-limit findings](docs/incidents/2026-10-31-mccarren-rate-limit.md). The latest recorded effective not-before deadline is **2026-11-02 13:55:41 UTC / 8:55:41 a.m. EST**. Collection is locally paused and will not retry automatically at that time. Cached observations remain historical until a complete verified read succeeds; a successful login alone does not establish recovery.
 
 ## Monitoring and logs
 
@@ -76,13 +86,30 @@ docker compose ps
 docker compose logs --no-color
 
 # With the app already running and fresh data:
-corepack pnpm exec node scripts/check-app.ts
+corepack pnpm exec node scripts/checks/check-app.ts
 
 # Docker restart/persistence acceptance check (temporarily changes then restores preferences):
-corepack pnpm exec node scripts/check-restart.ts
+corepack pnpm exec node scripts/checks/check-restart.ts
 ```
 
-Do not run the standalone live collector alongside the running service; they share the provider request budget. The original two-date feasibility probe remains available as `node scripts/mccarren.ts test-live --days=2`, but `make test-live` now uses the complete collector.
+Do not run the standalone live collector alongside the running service; they share the provider request budget. The original two-date feasibility probe remains available as `node scripts/diagnostics/mccarren.ts test-live --days=2`, but `make test-live` now uses the complete collector.
+
+## Project layout
+
+```text
+apps/service/src/       Backend: HTTP API, scheduler, SQLite, provider connectors
+apps/web/src/           React frontend
+packages/contracts/src/ Shared Zod schemas, TypeScript types, and date helpers
+scripts/                Supported connect, collect, and status commands
+scripts/diagnostics/    Provider inspection and the legacy feasibility probe
+scripts/checks/         Opt-in browser/runtime acceptance checks
+scripts/maintenance/    Manual incident-state maintenance tools
+docs/                   Architecture, API, source findings, and execution history
+```
+
+This is one Node package with a root `package.json` and shared dependencies. The `apps/` and `packages/` folders are source boundaries, not separate pnpm packages. Each app owns its `src/`; shared browser-safe contracts live in `packages/contracts/`. Tests are colocated with the code they exercise.
+
+Backend implementation lives under `apps/service/src/`, including shared session handling and provider-access/cooldown operations. Scripts call those modules to perform operator tasks. Acceptance checks can change preferences or restart Docker; maintenance tools can update local incident state, so neither runs as part of normal service startup.
 
 ## Storage and reconnecting
 
@@ -95,7 +122,6 @@ Do not run the standalone live collector alongside the running service; they sha
 
 On a failed check, cached starts remain visible with their original timestamps. After a network/API error, also check the in-page error and source status; old successful data is not evidence of current availability. Local health checks report service/storage readiness independently of provider health.
 
-During an active 429 cooldown, repeated reconnects and live probes do not help. Project live-probe commands refuse known cooldowns before making any provider request. Once access is permitted again, `node scripts/inspect-provider.ts --http` is a bounded, explicit diagnostic read; do not run it alongside collection. `node scripts/check-monitoring.ts` verifies the current degraded dashboard and refresh deferral using only the local service, without contacting CourtReserve.
+During a 429 cooldown or local collection pause, reconnects and live probes are refused before any provider request. Once the provider confirms an acceptable cadence and collection is explicitly enabled, `node scripts/diagnostics/inspect-provider.ts --http` is a bounded diagnostic read; do not run it alongside collection. `node scripts/checks/check-monitoring.ts` verifies the paused dashboard and refresh deferral using only the local service, without contacting CourtReserve; it expects the recorded rate-limit incident state rather than a healthy source.
 
-See the [interactive diagram guide](architecture.md), [architecture and code tour](docs/architecture.md), [source findings](docs/sources/mccarren.md), [API contract](docs/api.md), [execution checkpoint](docs/execution.md), and the [implementation plan](docs/implementation-plan.md) for evidence and remaining work.
-# court-tracker
+See the [interactive diagram guide](docs/architecture-diagram.md), [architecture and code tour](docs/architecture.md), [source findings](docs/sources/mccarren.md), [API contract](docs/api.md), [execution checkpoint](docs/execution.md), and the [implementation plan](docs/implementation-plan.md) for evidence and remaining work.

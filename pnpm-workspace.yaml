@@ -1,0 +1,6 @@
+packages:
+  - .
+
+# Dependencies have no approved lifecycle scripts. Browser installation is an
+# explicit Make target; dependency installation cannot execute arbitrary scripts.
+onlyBuiltDependencies: []
