@@ -9,6 +9,7 @@ import { createServer } from "vite";
 import {
   BOOKING_URL,
   PreferencesSchema,
+  type RefreshResponse,
   type DiagnosticsResponse,
   type Opening,
   type Preferences,
@@ -26,6 +27,7 @@ const viteConfig = path.resolve(webRoot, "vite.config.ts");
 function sourceStatus(
   needsLogin: boolean,
   collectionPaused = false,
+  providerNotBefore: string | null = null,
 ): SourceStatus {
   const now = DateTime.utc().toISO()!;
   return {
@@ -44,10 +46,12 @@ function sourceStatus(
     cadenceSeconds: 60,
     lastAttemptAt: now,
     lastSuccessAt: now,
-    nextDueAt: collectionPaused
-      ? DateTime.utc().plus({ minutes: 30 }).toISO()!
-      : null,
-    providerNotBefore: null,
+    nextDueAt: providerNotBefore
+      ? null
+      : collectionPaused
+        ? DateTime.utc().plus({ minutes: 30 }).toISO()!
+        : null,
+    providerNotBefore,
   };
 }
 
@@ -84,6 +88,7 @@ function scheduleFor(
   preferences: Preferences,
   grouped = false,
   collectionPaused = false,
+  providerNotBefore: string | null = null,
 ): ScheduleResponse {
   const now = DateTime.utc().toISO()!;
   const firstDay = DateTime.fromISO(from, { zone: ZONE });
@@ -94,7 +99,7 @@ function scheduleFor(
       to: firstDay.plus({ days: 6 }).toISODate()!,
       timeZone: ZONE,
     },
-    source: sourceStatus(needsLogin, collectionPaused),
+    source: sourceStatus(needsLogin, collectionPaused, providerNotBefore),
     preferences,
     partitions: Array.from({ length: 7 }, (_, index) => {
       const date = firstDay.plus({ days: index }).toISODate()!;
@@ -149,6 +154,7 @@ function scheduleFor(
 function diagnosticsFor(
   legacyOnly: boolean,
   collectionPaused = false,
+  providerNotBefore: string | null = null,
 ): DiagnosticsResponse {
   const lastSuccess = DateTime.utc().minus({ hours: 6 }).toISO()!;
   const diagnostic = {
@@ -159,12 +165,14 @@ function diagnosticsFor(
   };
   return {
     source: {
-      ...sourceStatus(false, collectionPaused),
+      ...sourceStatus(false, collectionPaused, providerNotBefore),
       health: "error",
       message: "Schedule collection was rate limited (HTTP 429).",
       lastSuccessAt: lastSuccess,
       lastAttemptAt: DateTime.utc().minus({ minutes: 8 }).toISO()!,
-      nextDueAt: DateTime.utc().plus({ minutes: 52 }).toISO()!,
+      nextDueAt: providerNotBefore
+        ? null
+        : DateTime.utc().plus({ minutes: 52 }).toISO()!,
       lastDiagnostic: diagnostic,
     },
     collection: {
@@ -225,12 +233,19 @@ test(
     let needsLogin = false;
     let scheduleFailure = false;
     let collectionPaused = false;
+    let providerNotBefore: string | null = null;
     let grouped = false;
     let holdNextSchedule = false;
+    let holdSources = false;
     let diagnosticsMode: "rate-limited" | "legacy" = "rate-limited";
     let diagnosticsFailures = 0;
     let diagnosticsRequests = 0;
     let releasePoll: (() => void) | undefined;
+    let releaseSources: (() => void) | undefined;
+    let refreshResponse: RefreshResponse = {
+      status: "coalesced",
+      nextDueAt: null,
+    };
     const browserErrors: string[] = [];
 
     try {
@@ -269,17 +284,25 @@ test(
                 preferences,
                 grouped,
                 collectionPaused,
+                providerNotBefore,
               ),
             ),
           });
           return;
         }
         if (url.pathname === "/api/sources") {
+          if (holdSources) {
+            await new Promise<void>((resolve) => {
+              releaseSources = resolve;
+            });
+          }
           await route.fulfill({
             status: 200,
             contentType: "application/json",
             body: JSON.stringify({
-              sources: [sourceStatus(needsLogin, collectionPaused)],
+              sources: [
+                sourceStatus(needsLogin, collectionPaused, providerNotBefore),
+              ],
             }),
           });
           return;
@@ -300,7 +323,11 @@ test(
             status: 200,
             contentType: "application/json",
             body: JSON.stringify(
-              diagnosticsFor(diagnosticsMode === "legacy", collectionPaused),
+              diagnosticsFor(
+                diagnosticsMode === "legacy",
+                collectionPaused,
+                providerNotBefore,
+              ),
             ),
           });
           return;
@@ -332,7 +359,7 @@ test(
           await route.fulfill({
             status: 200,
             contentType: "application/json",
-            body: JSON.stringify({ status: "coalesced", nextDueAt: null }),
+            body: JSON.stringify(refreshResponse),
           });
           return;
         }
@@ -603,7 +630,75 @@ test(
         0,
       );
       assert.equal(browserErrors.length, 2);
+
+      providerNotBefore = DateTime.utc().plus({ hours: 24 }).toISO()!;
+      await page.reload();
+      const expectedProviderDeadline = DateTime.fromISO(providerNotBefore)
+        .setZone(ZONE)
+        .toLocaleString({
+          ...DateTime.DATETIME_MED_WITH_WEEKDAY,
+          timeZoneName: "short",
+        });
+      await page
+        .locator('.alert[role="status"]')
+        .getByText(/Recorded provider not-before:/)
+        .waitFor();
+      assert.equal(
+        (await page.locator('.alert[role="status"]').innerText()).includes(
+          "Not observed yet",
+        ),
+        false,
+      );
+      await diagnostics.click();
+      const providerDeadlineFact = page
+        .locator(".diagnostics-facts")
+        .getByText("Recorded provider not-before", { exact: true })
+        .locator("..");
+      await providerDeadlineFact.waitFor();
+      assert.equal(
+        await providerDeadlineFact.locator("dd").innerText(),
+        expectedProviderDeadline,
+      );
+      assert.equal(
+        await page
+          .locator(".diagnostics-facts")
+          .getByText("Last scheduled due before pause", { exact: true })
+          .count(),
+        0,
+      );
+      refreshResponse = {
+        status: "deferred",
+        nextDueAt: null,
+        providerNotBefore,
+      };
+      holdSources = true;
+      const sourceRequest = page.waitForRequest(
+        (request) => new URL(request.url()).pathname === "/api/sources",
+      );
+      await page.reload();
+      await sourceRequest;
+      await page
+        .getByRole("button", { name: "Request a schedule refresh" })
+        .click();
+      await page
+        .locator(".refresh-feedback")
+        .getByText(/recorded provider not-before/)
+        .waitFor();
+      assert.equal(
+        (await page.locator(".refresh-feedback").innerText()).includes(
+          expectedProviderDeadline,
+        ),
+        true,
+      );
+      const releasedSource = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/api/sources",
+      );
+      releaseSources?.();
+      holdSources = false;
+      await releasedSource;
+      assert.equal(browserErrors.length, 2);
     } finally {
+      releaseSources?.();
       await browser.close();
       await server.close();
     }

@@ -128,6 +128,13 @@ export default function DiagnosticsPanel() {
 
   const source = response?.source;
   const collection = response?.collection;
+  const providerNotBefore = source?.providerNotBefore ?? null;
+  const nextDueAt = providerNotBefore ?? source?.nextDueAt ?? null;
+  const nextDueLabel = providerNotBefore
+    ? "Recorded provider not-before"
+    : source?.collectionPaused
+      ? "Last scheduled due before pause"
+      : "Next due";
   const legacyChecks =
     response?.runs.length === 0 ? response.checks.slice(0, 3) : [];
 
@@ -205,14 +212,8 @@ export default function DiagnosticsPanel() {
                   <dd>{formatObserved(source!.lastAttemptAt)}</dd>
                 </div>
                 <div>
-                  <dt>
-                    {source!.collectionPaused
-                      ? source!.providerNotBefore
-                        ? "Recorded provider not-before"
-                        : "Last scheduled due before pause"
-                      : "Next due"}
-                  </dt>
-                  <dd>{formatObserved(source!.nextDueAt)}</dd>
+                  <dt>{nextDueLabel}</dt>
+                  <dd>{formatObserved(nextDueAt)}</dd>
                 </div>
                 <div>
                   <dt>Automatic cadence</dt>

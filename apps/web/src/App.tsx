@@ -109,6 +109,17 @@ function messageForFailure(code: string | null) {
   }
 }
 
+function sourceDueDescription(source: SourceStatus) {
+  const dueAt = source.providerNotBefore ?? source.nextDueAt;
+  if (!dueAt) return "";
+  const label = source.providerNotBefore
+    ? "Recorded provider not-before"
+    : source.collectionPaused
+      ? "Last scheduled due before pause"
+      : "Next permitted check";
+  return ` ${label}: ${formatObserved(dueAt)}.`;
+}
+
 function App() {
   const [anchorDate, setAnchorDate] = useState(() => localToday());
   const [schedule, setSchedule] = useState<ScheduleResponse | null>(null);
@@ -284,10 +295,16 @@ function App() {
             : sourceStatus?.collectionPaused
               ? "Collection is paused locally"
               : "Refresh deferred by the source schedule";
+      const providerNotBefore =
+        response.providerNotBefore ?? sourceStatus?.providerNotBefore;
+      const dueAt = providerNotBefore ?? response.nextDueAt;
+      const dueLabel = providerNotBefore
+        ? "recorded provider not-before"
+        : sourceStatus?.collectionPaused
+          ? "last scheduled due before pause"
+          : "next due";
       setRefreshMessage(
-        response.nextDueAt
-          ? `${label} · ${sourceStatus?.collectionPaused ? (sourceStatus.providerNotBefore ? "recorded provider not-before" : "last scheduled due before pause") : "next due"} ${formatObserved(response.nextDueAt)}`
-          : label,
+        dueAt ? `${label} · ${dueLabel} ${formatObserved(dueAt)}` : label,
       );
       if (response.status === "accepted" || response.status === "coalesced")
         window.setTimeout(() => void loadData(), 800);
@@ -656,10 +673,8 @@ function App() {
                     {source.collectionPaused
                       ? "Collection is paused locally; no automatic or manual provider requests will be sent. "
                       : source.message}
-                    {source.nextDueAt
-                      ? ` ${source.collectionPaused ? (source.providerNotBefore ? "Recorded provider not-before" : "Last scheduled due before pause") : "Next permitted check"}: ${formatObserved(source.nextDueAt)}.`
-                      : ""}{" "}
-                    Open Refresh activity & diagnostics below for details.
+                    {sourceDueDescription(source)} Open Refresh activity &
+                    diagnostics below for details.
                   </p>
                 </div>
               </div>

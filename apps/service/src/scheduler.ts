@@ -185,13 +185,25 @@ export class RefreshScheduler {
 
   requestRefresh(): RefreshResponse {
     this.providerNotBefore = this.store.readProviderNotBefore();
-    if (!this.collectionEnabled)
-      return { status: "deferred", nextDueAt: this.status().nextDueAt };
+    if (!this.collectionEnabled) {
+      const status = this.status();
+      return {
+        status: "deferred",
+        nextDueAt: status.providerNotBefore ?? status.nextDueAt,
+        ...(status.providerNotBefore
+          ? { providerNotBefore: status.providerNotBefore }
+          : {}),
+      };
+    }
     if (
       this.providerNotBefore &&
       Date.parse(this.providerNotBefore) > this.now()
     )
-      return { status: "deferred", nextDueAt: this.providerNotBefore };
+      return {
+        status: "deferred",
+        nextDueAt: this.providerNotBefore,
+        providerNotBefore: this.providerNotBefore,
+      };
     const status = this.status();
     if (
       !this.started ||

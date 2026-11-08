@@ -264,3 +264,23 @@ review results, blockers, and the next action for me.
 **Review:** A fresh read-only Luna reviewer inspected both workers' source changes and the parent integration/documentation against the captured script baseline. It found one introduced CLI compatibility regression: the legacy `check-session` alias and its failed-test status recording had been dropped during extraction. Both branches were restored to their original behavior. The parent also retained the maintenance importer's existing instruction to run with the service stopped. The reviewer confirmed those corrections and reported no remaining issue in the corrected files; the initial review found no other actionable issues. Final `make verify` passed again after correction: formatting, TypeScript, all **66 tests**, and production build. The reviewer inspected artifacts but did not independently run checks.
 
 **Current state / next action:** Structural cleanup is complete and changes remain unstaged for Jimmy's review. Supported Make commands retain their existing names; direct diagnostic/check paths are documented in the README. The running service and provider pause/cooldown state were not changed by this task. Review the resulting layout and source before staging the initial application commit.
+
+### 2026-11-01 — Follow-up branch for interrupted 429 deadline diagnostics
+
+**Request:** Continue the rate-limit investigation on a new branch after another session committed the initial pause/diagnostic work. The latest read-only review found that an interrupted refresh could retain a provider `Retry-After` in metadata while leaving `nextDueAt` null and changing health to `error`; the UI could then hide or mislabel the deadline.
+
+**Starting state:** Clean `main`/`origin/main` at `6f18e35` (`inital commit for court-tracker app`). Created local branch `fix/mccarren-rate-limit-diagnostics`; no files were staged or committed on this branch.
+
+**Changes on this branch:**
+
+- `apps/service/src/scheduler.ts` and `packages/contracts/src/index.ts`: a deferred manual refresh while collection is paused returns the durable `providerNotBefore` as a separate optional response field, before the generic `nextDueAt`.
+- `apps/web/src/App.tsx` and `apps/web/src/DiagnosticsPanel.tsx`: display the provider deadline whenever `providerNotBefore` exists, regardless of source health or local pause state; ordinary `nextDueAt` remains separately labeled.
+- `apps/service/src/scheduler.test.ts`: restart regression seeds a persisted 429 deadline with an in-progress status, verifies recovery to `error`/paused with `nextDueAt: null`, confirms `providerNotBefore` survives, and checks manual deferral still includes the deadline.
+- `apps/web/src/App.test.ts`: browser regressions verify a paused/error state with `providerNotBefore` and `nextDueAt: null` displays the exact provider deadline, and a refresh response can show that deadline before `/api/sources` loads.
+- `docs/api.md` documents the optional `RefreshResponse.providerNotBefore` field; `scripts/checks/check-monitoring.ts` verifies the deferred response returns the same deadline without changing source timestamps or triggering a provider request.
+
+**Verification:** `make verify` passed formatting, TypeScript, **66 tests**, and production build. `make up` kept the Docker service healthy with `collectionEnabled:false`. `node scripts/checks/check-monitoring.ts` reported `paused-monitoring-verified`, readiness 200, collection health 503, manual refresh deferred, and zero provider requests. `/api/diagnostics` still reports the unchanged `2026-11-02T13:55:41.121Z` provider not-before deadline; no provider request was made.
+
+**Review:** The first fresh review identified the interrupted-429 UI deadline gap described above. The follow-up review found no remaining scheduler/UI/contract/test issue; its only documentation finding was that the checkpoint omitted `docs/api.md` and `scripts/checks/check-monitoring.ts`, now listed above. A final fresh review of the optional refresh-response deadline and the no-source-status UI path found no actionable findings. Reviewers inspected the supplied diff and source; they did not rerun the recorded checks, and no provider call was made.
+
+**Current state / next action:** `fix/mccarren-rate-limit-diagnostics` contains the nine-file follow-up deadline-diagnostics change; working-tree changes remain unstaged and uncommitted. Leave the branch for Jimmy's review. Do not enable collection until McCarren/CourtReserve confirms an acceptable cadence.
