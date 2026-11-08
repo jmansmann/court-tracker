@@ -10,7 +10,7 @@ Served on `http://127.0.0.1:4317`, with the built dashboard on the same origin. 
 | `GET /api/facilities`                      | Single McCarren indoor facility and external booking URL                                                                |
 | `GET /api/preferences`                     | `Preferences`                                                                                                           |
 | `PATCH /api/preferences`                   | Merged `Preferences`; accepts only view, durationMinutes, includeUnknownDuration, courtIds                              |
-| `POST /api/refresh-requests` with `{}`     | HTTP 202, status `accepted`, `coalesced`, or `deferred`, and `nextDueAt`                                                |
+| `POST /api/refresh-requests` with `{}`     | HTTP 202, status `accepted`, `coalesced`, or `deferred`, `nextDueAt`, and optional `providerNotBefore`                  |
 | `GET /health/live`                         | Process health                                                                                                          |
 | `GET /health/ready`                        | Storage readiness and revision; provider failures do not fail readiness                                                 |
 | `GET /health/collection`                   | HTTP 200 while the last complete snapshot is within the freshness threshold; HTTP 503 when it is not fresh              |

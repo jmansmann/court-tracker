@@ -167,6 +167,7 @@ describe("refresh scheduler", () => {
     assert.deepEqual(task.requestRefresh(), {
       status: "deferred",
       nextDueAt: task.status().nextDueAt,
+      providerNotBefore: task.status().providerNotBefore,
     });
 
     now += 300_000;
@@ -533,6 +534,7 @@ describe("refresh scheduler", () => {
   });
 
   it("clears a persisted in-progress status after a process restart", async () => {
+    const providerNotBefore = new Date(now + 7_200_000).toISOString();
     store.setStatus({
       id: "mccarren",
       name: "McCarren Tennis Center",
@@ -549,17 +551,41 @@ describe("refresh scheduler", () => {
       lastSuccessAt: null,
       nextDueAt: null,
     });
+    store.setProviderNotBefore(providerNotBefore);
     store.close();
     store = new ScheduleStore(join(root, "schedule.sqlite"));
-    const task = scheduler({
-      async collect() {
-        return resultSummary(0);
+    let calls = 0;
+    const task = new RefreshScheduler({
+      store,
+      connector: {
+        async collect() {
+          calls++;
+          return resultSummary(0);
+        },
+        async close() {},
       },
-      async close() {},
+      sessionRevision: async () => "session-1",
+      cadenceSeconds: 60,
+      now: () => now,
+      collectionEnabled: false,
     });
     assert.equal(task.status().isRefreshing, false);
     assert.equal(task.status().health, "error");
+    assert.equal(task.status().collectionPaused, true);
+    assert.equal(task.status().nextDueAt, null);
+    assert.equal(
+      Date.parse(task.status().providerNotBefore!),
+      Date.parse(providerNotBefore),
+    );
     assert.match(task.status().message, /interrupted/);
+    task.start();
+    await task.waitForIdle();
+    assert.equal(calls, 0);
+    assert.deepEqual(task.requestRefresh(), {
+      status: "deferred",
+      nextDueAt: providerNotBefore,
+      providerNotBefore,
+    });
     await task.stop();
   });
 

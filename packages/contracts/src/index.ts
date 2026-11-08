@@ -197,6 +197,7 @@ export type ScheduleResponse = z.infer<typeof ScheduleResponseSchema>;
 export const RefreshResponseSchema = z.object({
   status: z.enum(["accepted", "coalesced", "deferred"]),
   nextDueAt: InstantSchema.nullable(),
+  providerNotBefore: InstantSchema.nullable().optional(),
 });
 export type RefreshResponse = z.infer<typeof RefreshResponseSchema>;
 

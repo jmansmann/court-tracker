@@ -68,10 +68,9 @@ try {
     return { status: response.status, body: await response.json() };
   });
   assert.equal(refreshResponse.status, 202);
-  assert.equal(
-    RefreshResponseSchema.parse(refreshResponse.body).status,
-    "deferred",
-  );
+  const refresh = RefreshResponseSchema.parse(refreshResponse.body);
+  assert.equal(refresh.status, "deferred");
+  assert.equal(refresh.providerNotBefore, before.source.providerNotBefore);
   if (process.env.APP_SCREENSHOT_PATH)
     await page.screenshot({
       path: process.env.APP_SCREENSHOT_PATH,
